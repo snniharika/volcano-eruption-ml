@@ -7,7 +7,9 @@ import warnings
 
 import joblib
 import matplotlib
+
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -71,11 +73,13 @@ MODELS = (
     / "models"
 )
 
+
 FIGURES = (
     ROOT
     / "results"
     / "figures"
 )
+
 
 METRICS = (
     ROOT
@@ -84,10 +88,7 @@ METRICS = (
 )
 
 
-# ============================================================
 # TIME-BASED SPLIT
-# ============================================================
-
 def split_time_series_data(df):
     """
     Split the daily observations chronologically.
@@ -203,10 +204,7 @@ def split_time_series_data(df):
     )
 
 
-# ============================================================
 # CLASSIFICATION MODELS
-# ============================================================
-
 def get_classification_models():
 
     return {
@@ -314,23 +312,21 @@ def get_classification_models():
     }
 
 
-# ============================================================
 # CLASSIFICATION EVALUATION
-# ============================================================
-
 def evaluate_classification(
     model,
     X,
     y,
+    threshold=0.5,
 ):
-
-    predictions = (
-        model.predict(X)
-    )
 
     probabilities = (
         model.predict_proba(X)[:, 1]
     )
+
+    predictions = (
+        probabilities >= threshold
+    ).astype(int)
 
     return {
 
@@ -397,10 +393,7 @@ def evaluate_classification(
     }
 
 
-# ============================================================
 # CLEAN OLD GENERATED OUTPUTS
-# ============================================================
-
 def clean_old_outputs():
 
     MODELS.mkdir(
@@ -440,10 +433,7 @@ def clean_old_outputs():
         path.unlink()
 
 
-# ============================================================
 # CONFUSION MATRIX
-# ============================================================
-
 def plot_confusion_matrix(
     name,
     matrix,
@@ -485,10 +475,7 @@ def plot_confusion_matrix(
     plt.close()
 
 
-# ============================================================
 # CLASSIFICATION COMPARISON
-# ============================================================
-
 def plot_classification_comparison(
     results,
 ):
@@ -561,10 +548,7 @@ def plot_classification_comparison(
     plt.close()
 
 
-# ============================================================
 # RANDOM FOREST FEATURE IMPORTANCE
-# ============================================================
-
 def plot_feature_importance(
     random_forest,
 ):
@@ -618,10 +602,7 @@ def plot_feature_importance(
     plt.close()
 
 
-# ============================================================
 # TEST-SET FORECAST TIMELINE
-# ============================================================
-
 def plot_test_forecast_timeline(
     model,
     X_test,
@@ -692,24 +673,69 @@ def plot_test_forecast_timeline(
     plt.close()
 
 
-# ============================================================
-# MAIN
-# ============================================================
+def find_best_threshold(y_true, probabilities):
+    """
+    Select the classification threshold that gives the highest
+    Cohen's Kappa on the development set.
 
+    The test set is never used for threshold selection.
+    """
+
+    thresholds = np.arange(
+        0.05,
+        0.96,
+        0.01,
+    )
+
+    best_threshold = 0.5
+    best_kappa = -1.0
+
+    for threshold in thresholds:
+
+        predictions = (
+            probabilities >= threshold
+        ).astype(int)
+
+        kappa = cohen_kappa_score(
+            y_true,
+            predictions,
+        )
+
+        if kappa > best_kappa:
+            best_kappa = kappa
+            best_threshold = threshold
+
+    return (
+        float(best_threshold),
+        float(best_kappa),
+    )
+
+
+# MAIN
 def main():
 
     clean_old_outputs()
 
     print()
+
     print("=" * 60)
-    print("BUILDING DAILY FORECAST DATASET")
+
+    print(
+        "BUILDING DAILY FORECAST DATASET"
+    )
+
     print("=" * 60)
 
     df = build_dataset()
 
     print()
+
     print("=" * 60)
-    print("TIME-BASED CLASSIFICATION")
+
+    print(
+        "TIME-BASED CLASSIFICATION"
+    )
+
     print("=" * 60)
 
     (
@@ -728,7 +754,11 @@ def main():
     )
 
     print()
-    print("Chronological split:")
+
+    print(
+        "Chronological split:"
+    )
+
     print(
         f"Training:    "
         f"{split_info['train_start']} "
@@ -736,6 +766,7 @@ def main():
         f"{split_info['train_end']} "
         f"({split_info['train_rows']:,} rows)"
     )
+
     print(
         f"Development: "
         f"{split_info['dev_start']} "
@@ -743,6 +774,7 @@ def main():
         f"{split_info['dev_end']} "
         f"({split_info['dev_rows']:,} rows)"
     )
+
     print(
         f"Testing:     "
         f"{split_info['test_start']} "
@@ -752,17 +784,21 @@ def main():
     )
 
     print()
+
     print(
         "Positive forecast windows:"
     )
+
     print(
         f"  Training:    "
         f"{split_info['train_positive']:,}"
     )
+
     print(
         f"  Development: "
         f"{split_info['dev_positive']:,}"
     )
+
     print(
         f"  Testing:     "
         f"{split_info['test_positive']:,}"
@@ -779,6 +815,7 @@ def main():
     ):
 
         print()
+
         print(
             f"Training classifier: "
             f"{name}"
@@ -789,19 +826,49 @@ def main():
             y_train,
         )
 
+        # Select the classification threshold ONLY
+        # using the development set.
+        development_probabilities = (
+            model.predict_proba(X_dev)[:, 1]
+        )
+
+        (
+            best_threshold,
+            threshold_dev_kappa,
+        ) = find_best_threshold(
+            y_dev,
+            development_probabilities,
+        )
+
+        print(
+            f"Selected threshold: "
+            f"{best_threshold:.2f}"
+        )
+
+        print(
+            f"Development Kappa at selected threshold: "
+            f"{threshold_dev_kappa:.6f}"
+        )
+
+        # Evaluate the development set using the
+        # threshold selected from the development set.
         development_results = (
             evaluate_classification(
                 model,
                 X_dev,
                 y_dev,
+                threshold=best_threshold,
             )
         )
 
+        # Freeze the threshold and apply the same
+        # threshold to the unseen test set.
         test_results = (
             evaluate_classification(
                 model,
                 X_test,
                 y_test,
+                threshold=best_threshold,
             )
         )
 
@@ -855,6 +922,10 @@ def main():
                     test_results[
                         "f1"
                     ]
+                ),
+
+                "threshold": (
+                    best_threshold
                 ),
             }
         )
@@ -979,12 +1050,20 @@ def main():
         )
 
     print()
+
     print("=" * 60)
-    print("TRAINING COMPLETE")
+
+    print(
+        "TRAINING COMPLETE"
+    )
+
     print("=" * 60)
 
     print()
-    print("Classification results:")
+
+    print(
+        "Classification results:"
+    )
 
     print(
         pd.DataFrame(
@@ -995,18 +1074,21 @@ def main():
     )
 
     print()
+
     print(
         f"Models saved to:\n"
         f"{MODELS}"
     )
 
     print()
+
     print(
         f"Figures saved to:\n"
         f"{FIGURES}"
     )
 
     print()
+
     print(
         f"Metrics saved to:\n"
         f"{METRICS}"
@@ -1014,4 +1096,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()  
+    main()

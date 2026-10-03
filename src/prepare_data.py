@@ -11,28 +11,30 @@ ROOT = Path(__file__).resolve().parents[1]
 RAW = ROOT / "data" / "raw"
 PROCESSED = ROOT / "data" / "processed"
 
+FORECAST_HORIZON_DAYS = 7
 
 FEATURE_COLUMNS = [
-    "latitude",
-    "longitude",
-    "depth",
-    "magnitude",
-    "eq_rate_1d",
-    "eq_rate_7d",
-    "eq_rate_30d",
+    "daily_eq_count",
+    "mean_latitude",
+    "mean_longitude",
+    "mean_depth",
+    "std_depth",
+    "mean_magnitude",
+    "seismic_energy",
+    "prev_1d_eq_count",
+    "prev_7d_eq_count",
+    "prev_30d_eq_count",
+    "eq_count_ratio_1d_30d",
+    "days_since_last_eruption",
+    "last_repose_days",
 ]
+
+TARGET_COLUMN = "eruption_next_7d"
 
 
 def load_earthquakes(path=None):
     """
-    Load the earthquake catalogue.
-
-    Required columns:
-        Date-time
-        Latitude
-        Longitude
-        Depth
-        Magnitude
+    Load the earthquake catalogue and parse timestamps.
     """
 
     if path is None:
@@ -40,7 +42,10 @@ def load_earthquakes(path=None):
 
     df = pd.read_csv(path)
 
-    df.columns = [column.strip() for column in df.columns]
+    df.columns = [
+        column.strip()
+        for column in df.columns
+    ]
 
     df["timestamp"] = pd.to_datetime(
         df["Date-time"],
@@ -65,13 +70,11 @@ def load_earthquakes(path=None):
         "magnitude",
     ]
 
-    df = df[required_columns]
+    df = df[required_columns].dropna()
 
-    df = df.dropna()
-
-    df = df.sort_values("timestamp")
-
-    df = df.reset_index(drop=True)
+    df = df.sort_values(
+        "timestamp"
+    ).reset_index(drop=True)
 
     return df
 
@@ -79,6 +82,8 @@ def load_earthquakes(path=None):
 def load_eruptions(path=None):
     """
     Load the historical eruption catalogue.
+
+    Repose is kept because it is used as a historical feature.
     """
 
     if path is None:
@@ -97,276 +102,381 @@ def load_eruptions(path=None):
         errors="coerce",
     )
 
-    eruptions["length_hours"] = (
-        eruptions["Length"]
-        .astype(str)
-        .str.extract(r"([0-9.]+)")[0]
-        .astype(float)
+    eruptions["repose_days"] = pd.to_numeric(
+        eruptions["Repose"],
+        errors="coerce",
     )
 
     eruptions = eruptions[
         [
             "eruption_start",
-            "length_hours",
-            "Repose",
-            "Flow Area",
-            "Flow Volume",
-            "Rate",
-            "Location",
+            "repose_days",
         ]
-    ]
-
-    eruptions = eruptions.dropna(
-        subset=[
-            "eruption_start",
-            "length_hours",
-        ]
+    ].dropna(
+        subset=["eruption_start"]
     )
 
     eruptions = eruptions.sort_values(
         "eruption_start"
-    )
-
-    eruptions = eruptions.reset_index(drop=True)
+    ).reset_index(drop=True)
 
     return eruptions
 
 
-def count_previous_earthquakes(
-    timestamps: pd.Series,
-    window_days: int,
-) -> np.ndarray:
-    """
-    Count previous earthquakes inside a time window.
-
-    For every earthquake at time t, count earthquakes
-    in the interval:
-
-        [t - window_days, t)
-
-    The current earthquake itself is therefore excluded.
-    """
-
-    values = (
-        timestamps
-        .astype("int64")
-        .to_numpy()
-    )
-
-    window_ns = (
-        window_days
-        * 24
-        * 60
-        * 60
-        * 1_000_000_000
-    )
-
-    left_indices = np.searchsorted(
-        values,
-        values - window_ns,
-        side="left",
-    )
-
-    right_indices = np.arange(
-        len(values)
-    )
-
-    counts = (
-        right_indices
-        - left_indices
-    )
-
-    return counts
-
-
-def add_earthquake_rates(
+def aggregate_daily_earthquakes(
     earthquakes: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Add earthquake-rate/count features.
+    Convert individual earthquakes into one row per calendar day.
 
-    The paper uses counts over:
-        - previous day
-        - previous 7 days
-        - previous 30 days
+    The daily row contains:
+        - number of earthquakes
+        - mean location
+        - mean and spread of depth
+        - mean magnitude
+        - total relative seismic energy
+
+    The energy feature uses 10^(1.5 * magnitude) as a
+    relative seismic-energy proxy.
     """
 
-    df = earthquakes.copy()
+    data = earthquakes.copy()
 
-    df["eq_rate_1d"] = count_previous_earthquakes(
-        df["timestamp"],
-        1,
+    data["date"] = (
+        data["timestamp"]
+        .dt.floor("D")
     )
 
-    df["eq_rate_7d"] = count_previous_earthquakes(
-        df["timestamp"],
-        7,
+    data["relative_energy"] = (
+        10.0
+        ** (
+            1.5
+            * data["magnitude"]
+        )
     )
 
-    df["eq_rate_30d"] = count_previous_earthquakes(
-        df["timestamp"],
-        30,
+    daily = (
+        data.groupby("date")
+        .agg(
+            daily_eq_count=(
+                "magnitude",
+                "size",
+            ),
+            mean_latitude=(
+                "latitude",
+                "mean",
+            ),
+            mean_longitude=(
+                "longitude",
+                "mean",
+            ),
+            mean_depth=(
+                "depth",
+                "mean",
+            ),
+            std_depth=(
+                "depth",
+                "std",
+            ),
+            mean_magnitude=(
+                "magnitude",
+                "mean",
+            ),
+            seismic_energy=(
+                "relative_energy",
+                "sum",
+            ),
+        )
+        .reset_index()
     )
 
-    return df
+    first_date = (
+        data["date"].min()
+    )
+
+    last_date = (
+        data["date"].max()
+    )
+
+    all_dates = pd.DataFrame(
+        {
+            "date": pd.date_range(
+                first_date,
+                last_date,
+                freq="D",
+            )
+        }
+    )
+
+    daily = (
+        all_dates
+        .merge(
+            daily,
+            on="date",
+            how="left",
+        )
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    # No earthquake means zero count and zero total
+    # relative seismic energy for that day.
+    daily["daily_eq_count"] = (
+        daily["daily_eq_count"]
+        .fillna(0)
+    )
+
+    daily["seismic_energy"] = (
+        daily["seismic_energy"]
+        .fillna(0)
+    )
+
+    daily["std_depth"] = (
+        daily["std_depth"]
+        .fillna(0)
+    )
+
+    return daily
 
 
-def add_labels(
-    earthquakes: pd.DataFrame,
+def add_rolling_features(
+    daily: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Add historical earthquake-activity features.
+
+    The rolling counts are shifted by one day, so the
+    previous-day/week/month activity never includes
+    the day being predicted from.
+    """
+
+    data = daily.copy()
+
+    previous_counts = (
+        data["daily_eq_count"]
+        .shift(1)
+    )
+
+    data["prev_1d_eq_count"] = (
+        previous_counts
+        .rolling(
+            window=1,
+            min_periods=1,
+        )
+        .sum()
+        .fillna(0)
+    )
+
+    data["prev_7d_eq_count"] = (
+        previous_counts
+        .rolling(
+            window=7,
+            min_periods=1,
+        )
+        .sum()
+        .fillna(0)
+    )
+
+    data["prev_30d_eq_count"] = (
+        previous_counts
+        .rolling(
+            window=30,
+            min_periods=1,
+        )
+        .sum()
+        .fillna(0)
+    )
+
+    data["eq_count_ratio_1d_30d"] = (
+        data["prev_1d_eq_count"]
+        / (
+            data["prev_30d_eq_count"]
+            + 1.0
+        )
+    )
+
+    return data
+
+
+def add_eruption_history_features(
+    daily: pd.DataFrame,
     eruptions: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Create:
+    Add:
+        - days since the most recent known eruption start
+        - repose duration recorded for that eruption
 
-        erupting
-        time_to_eruption_hours
-
-    Classification:
-        1 = erupting
-        0 = repose
-
-    An earthquake is considered to occur during an
-    eruption if it falls within:
-
-        eruption start
-        through
-        eruption duration + 24 hours
+    Only eruption information available on or before the
+    current daily window is used.
     """
 
-    df = earthquakes.copy()
+    data = daily.copy()
 
     eruption_starts = (
         eruptions["eruption_start"]
-        .sort_values()
-        .to_numpy()
-    )
-
-    eruption_lengths = (
-        eruptions["length_hours"]
-        .to_numpy(dtype=float)
-    )
-
-    earthquake_times = (
-        df["timestamp"]
-        .to_numpy(dtype="datetime64[ns]")
+        .to_numpy(
+            dtype="datetime64[ns]"
+        )
     )
 
     eruption_start_ns = (
         eruption_starts
-        .astype("datetime64[ns]")
         .astype("int64")
     )
 
-    earthquake_time_ns = (
-        earthquake_times
-        .astype("datetime64[ns]")
-        .astype("int64")
+    daily_dates = (
+        data["date"]
+        .to_numpy(
+            dtype="datetime64[ns]"
+        )
     )
 
-    # -------------------------------------------------
-    # Find the most recent eruption before each
-    # earthquake.
-    # -------------------------------------------------
+    daily_ns = (
+        daily_dates
+        .astype("int64")
+    )
 
     previous_indices = np.searchsorted(
         eruption_start_ns,
-        earthquake_time_ns,
+        daily_ns,
         side="right",
     ) - 1
 
-    has_previous_eruption = (
+    has_previous = (
         previous_indices >= 0
     )
 
-    safe_previous_indices = np.clip(
+    safe_indices = np.clip(
         previous_indices,
         0,
         len(eruption_start_ns) - 1,
     )
 
-    elapsed_hours = (
-        earthquake_time_ns
-        - eruption_start_ns[
-            safe_previous_indices
+    data["days_since_last_eruption"] = (
+        -1.0
+    )
+
+    data["last_repose_days"] = (
+        -1.0
+    )
+
+    data.loc[
+        has_previous,
+        "days_since_last_eruption",
+    ] = (
+        (
+            daily_ns[has_previous]
+            - eruption_start_ns[
+                safe_indices[has_previous]
+            ]
+        )
+        / 86_400_000_000_000.0
+    )
+
+    repose_values = (
+        eruptions["repose_days"]
+        .to_numpy(dtype=float)
+    )
+
+    data.loc[
+        has_previous,
+        "last_repose_days",
+    ] = (
+        repose_values[
+            safe_indices[has_previous]
         ]
-    ) / 3_600_000_000_000.0
+    )
 
-    # -------------------------------------------------
-    # Classification label
-    # -------------------------------------------------
+    return data
 
-    erupting = np.zeros(
-        len(df),
+
+def add_forecast_target(
+    daily: pd.DataFrame,
+    eruptions: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Create the new forecasting target.
+
+    For each daily observation at the end of date D:
+
+        target = 1
+        if an eruption starts during the next 7
+        calendar days after D.
+
+        target = 0 otherwise.
+
+    The eruption date itself is not included in the
+    current day's future target window.
+    """
+
+    data = daily.copy()
+
+    eruption_dates = set(
+        eruptions[
+            "eruption_start"
+        ].dt.floor("D")
+    )
+
+    target = []
+
+    for date in data["date"]:
+
+        future_dates = pd.date_range(
+            date
+            + pd.Timedelta(days=1),
+            date
+            + pd.Timedelta(
+                days=FORECAST_HORIZON_DAYS
+            ),
+            freq="D",
+        )
+
+        target.append(
+            int(
+                any(
+                    future_date
+                    in eruption_dates
+                    for future_date in future_dates
+                )
+            )
+        )
+
+    data[TARGET_COLUMN] = np.asarray(
+        target,
         dtype=int,
     )
 
-    valid_previous = (
-        has_previous_eruption
+    # The eruption catalogue only supports targets up to
+    # its final known eruption date. The final 7 days cannot
+    # be labeled reliably because their complete future
+    # horizon is outside the supplied eruption catalogue.
+    last_eruption_date = (
+        eruptions["eruption_start"]
+        .max()
+        .floor("D")
     )
 
-    erupting[valid_previous] = (
-        elapsed_hours[valid_previous]
-        <= (
-            eruption_lengths[
-                safe_previous_indices[
-                    valid_previous
-                ]
-            ]
-            + 24.0
+    last_usable_date = (
+        last_eruption_date
+        - pd.Timedelta(
+            days=FORECAST_HORIZON_DAYS
         )
-    ).astype(int)
-
-    # -------------------------------------------------
-    # Find the next eruption after each earthquake.
-    # -------------------------------------------------
-
-    next_indices = np.searchsorted(
-        eruption_start_ns,
-        earthquake_time_ns,
-        side="right",
     )
 
-    has_next_eruption = (
-        next_indices
-        < len(eruption_start_ns)
+    data = data[
+        data["date"]
+        <= last_usable_date
+    ].copy()
+
+    return data.reset_index(
+        drop=True
     )
-
-    time_to_eruption_hours = np.full(
-        len(df),
-        np.nan,
-        dtype=float,
-    )
-
-    time_to_eruption_hours[
-        has_next_eruption
-    ] = (
-        eruption_start_ns[
-            next_indices[
-                has_next_eruption
-            ]
-        ]
-        - earthquake_time_ns[
-            has_next_eruption
-        ]
-    ) / 3_600_000_000_000.0
-
-    # During an eruption, time-to-eruption is zero.
-    time_to_eruption_hours[
-        erupting == 1
-    ] = 0.0
-
-    df["erupting"] = erupting
-
-    df["time_to_eruption_hours"] = (
-        time_to_eruption_hours
-    )
-
-    return df
 
 
 def build_dataset():
     """
-    Execute the complete preprocessing pipeline.
+    Build the daily-window forecasting dataset.
     """
 
     PROCESSED.mkdir(
@@ -374,48 +484,83 @@ def build_dataset():
         exist_ok=True,
     )
 
-    print("Loading earthquake catalogue...")
+    print(
+        "Loading earthquake catalogue..."
+    )
 
-    earthquakes = load_earthquakes()
+    earthquakes = (
+        load_earthquakes()
+    )
 
     print(
         f"Earthquake records loaded: "
         f"{len(earthquakes):,}"
     )
 
-    print("Loading eruption catalogue...")
+    print(
+        "Loading eruption catalogue..."
+    )
 
-    eruptions = load_eruptions()
+    eruptions = (
+        load_eruptions()
+    )
 
     print(
         f"Eruption records loaded: "
         f"{len(eruptions):,}"
     )
 
-    print("Creating earthquake-rate features...")
-
-    data = add_earthquake_rates(
-        earthquakes
+    print(
+        "Aggregating earthquakes into daily windows..."
     )
 
-    print("Creating eruption labels...")
+    data = (
+        aggregate_daily_earthquakes(
+            earthquakes
+        )
+    )
 
-    data = add_labels(
-        data,
-        eruptions,
+    print(
+        "Creating historical activity features..."
+    )
+
+    data = (
+        add_rolling_features(
+            data
+        )
+    )
+
+    print(
+        "Creating eruption-history features..."
+    )
+
+    data = (
+        add_eruption_history_features(
+            data,
+            eruptions,
+        )
+    )
+
+    print(
+        "Creating next-7-day eruption target..."
+    )
+
+    data = (
+        add_forecast_target(
+            data,
+            eruptions,
+        )
+    )
+
+    output_columns = (
+        ["date"]
+        + FEATURE_COLUMNS
+        + [TARGET_COLUMN]
     )
 
     output_path = (
         PROCESSED
         / "model_dataset.csv"
-    )
-
-    output_columns = (
-        FEATURE_COLUMNS
-        + [
-            "erupting",
-            "time_to_eruption_hours",
-        ]
     )
 
     data[
@@ -427,34 +572,40 @@ def build_dataset():
 
     print()
     print("=" * 60)
-    print("DATASET CREATION COMPLETE")
+    print("DAILY FORECAST DATASET COMPLETE")
     print("=" * 60)
 
     print(
-        f"Total rows: "
+        f"Forecast windows: "
         f"{len(data):,}"
     )
 
     print(
-        f"Erupting samples: "
-        f"{data['erupting'].sum():,}"
+        f"Positive windows "
+        f"(eruption in next "
+        f"{FORECAST_HORIZON_DAYS} days): "
+        f"{data[TARGET_COLUMN].sum():,}"
     )
 
     print(
-        f"Repose samples: "
-        f"{(data['erupting'] == 0).sum():,}"
+        f"Negative windows: "
+        f"{(data[TARGET_COLUMN] == 0).sum():,}"
     )
 
     print(
-        "Samples with time-to-eruption target: "
-        f"{data['time_to_eruption_hours'].notna().sum():,}"
+        f"Date range: "
+        f"{data['date'].min().date()} "
+        f"to "
+        f"{data['date'].max().date()}"
     )
 
     print()
     print("Features:")
 
     for feature in FEATURE_COLUMNS:
-        print(f"  - {feature}")
+        print(
+            f"  - {feature}"
+        )
 
     print()
     print(

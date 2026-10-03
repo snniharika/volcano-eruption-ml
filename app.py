@@ -4,47 +4,75 @@ import json
 import joblib
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+
+from src.prepare_data import (
+    FEATURE_COLUMNS,
+    FORECAST_HORIZON_DAYS,
+)
 
 
 # PATHS
 ROOT = Path(__file__).resolve().parent
-MODELS = ROOT / "models"
-METRICS = ROOT / "results" / "metrics"
-FIGURES = ROOT / "results" / "figures"
+
+MODELS = (
+    ROOT
+    / "models"
+)
+
+METRICS = (
+    ROOT
+    / "results"
+    / "metrics"
+)
+
+FIGURES = (
+    ROOT
+    / "results"
+    / "figures"
+)
 
 
-
-# STREAMLIT PAGE CONFIGURATION
+# PAGE CONFIGURATION
 st.set_page_config(
-    page_title="Kīlauea Eruption Predictor",
+    page_title="Kīlauea Eruption Forecast",
     layout="wide",
 )
 
 
 # TITLE
-st.title("Predicting Eruptive Events at Volcanoes from Earthquake Data")
+st.title(
+    "Kīlauea Eruption Forecast from Daily Earthquake Activity"
+)
 
 st.caption(
-    "Academic ML mini-project based on the supplied paper "
-    "and its Kīlauea earthquake/eruption data."
+    "Academic ML mini-project using daily earthquake windows "
+    "to forecast whether an eruption will start within the "
+    f"next {FORECAST_HORIZON_DAYS} days."
 )
 
 
 # LOAD SUMMARY
-summary_path = METRICS / "summary.json"
+summary_path = (
+    METRICS
+    / "summary.json"
+)
 
 if not summary_path.exists():
+
     st.error(
         "Training results were not found. "
         "Run `python -m src.train` first."
     )
+
     st.stop()
 
+
 summary = json.loads(
-    summary_path.read_text(encoding="utf-8")
+    summary_path.read_text(
+        encoding="utf-8"
+    )
 )
 
 
@@ -52,23 +80,96 @@ summary = json.loads(
 col1, col2, col3 = st.columns(3)
 
 col1.metric(
-    "Earthquake records",
-    f"{summary['rows']:,}"
+    "Daily forecast windows",
+    f"{summary['rows']:,}",
 )
 
 col2.metric(
-    "Erupting labels",
-    f"{summary['positive_labels']:,}"
+    "Positive windows",
+    f"{summary['positive_labels']:,}",
 )
 
 col3.metric(
-    "Repose labels",
-    f"{summary['negative_labels']:,}"
+    "Negative windows",
+    f"{summary['negative_labels']:,}",
+)
+
+
+st.info(
+    "Each row represents one calendar day. "
+    f"The target is 1 when an eruption starts within "
+    f"the following {FORECAST_HORIZON_DAYS} days."
+)
+
+
+# TIME-BASED SPLIT INFORMATION
+st.subheader(
+    "Chronological train / development / test split"
+)
+
+split_info = summary["split"]
+
+split_table = pd.DataFrame(
+    [
+        {
+            "set": "Training",
+            "start": split_info[
+                "train_start"
+            ],
+            "end": split_info[
+                "train_end"
+            ],
+            "rows": split_info[
+                "train_rows"
+            ],
+            "positive windows": split_info[
+                "train_positive"
+            ],
+        },
+        {
+            "set": "Development",
+            "start": split_info[
+                "dev_start"
+            ],
+            "end": split_info[
+                "dev_end"
+            ],
+            "rows": split_info[
+                "dev_rows"
+            ],
+            "positive windows": split_info[
+                "dev_positive"
+            ],
+        },
+        {
+            "set": "Testing",
+            "start": split_info[
+                "test_start"
+            ],
+            "end": split_info[
+                "test_end"
+            ],
+            "rows": split_info[
+                "test_rows"
+            ],
+            "positive windows": split_info[
+                "test_positive"
+            ],
+        },
+    ]
+)
+
+st.dataframe(
+    split_table,
+    use_container_width=True,
+    hide_index=True,
 )
 
 
 # CLASSIFICATION RESULTS
-st.subheader("Classification results")
+st.subheader(
+    "Daily 7-day forecast model results"
+)
 
 classification_metrics = pd.DataFrame(
     summary["classification_models"]
@@ -81,364 +182,283 @@ st.dataframe(
 )
 
 
-# REGRESSION RESULTS
-st.subheader("Regression results")
-
-regression_metrics = pd.DataFrame(
-    summary["regression_models"]
+# SINGLE-DAY FORECAST
+st.subheader(
+    "Forecast from one daily earthquake window"
 )
-
-st.dataframe(
-    regression_metrics,
-    use_container_width=True,
-    hide_index=True,
-)
-
-
-# REGRESSION VISUALIZATIONS
-st.subheader("Regression model comparison")
-
-chart_col1, chart_col2 = st.columns(2)
-
-# RMSE CHART
-with chart_col1:
-
-    fig_rmse, ax_rmse = plt.subplots(figsize=(7, 5))
-
-    model_labels = [
-        model.replace("_", " ").title()
-        for model in regression_metrics["model"]
-    ]
-
-    ax_rmse.bar(
-        model_labels,
-        regression_metrics["test_rmse"],
-    )
-
-    ax_rmse.set_title("Test RMSE Comparison")
-    ax_rmse.set_ylabel("RMSE (hours)")
-    ax_rmse.set_xlabel("Model")
-
-    ax_rmse.tick_params(axis="x", rotation=20)
-
-    for index, value in enumerate(
-        regression_metrics["test_rmse"]
-    ):
-        ax_rmse.text(
-            index,
-            value,
-            f"{value:.2f}",
-            ha="center",
-            va="bottom",
-        )
-
-    fig_rmse.tight_layout()
-
-    st.pyplot(
-        fig_rmse,
-        use_container_width=True,
-    )
-
-    plt.close(fig_rmse)
-
-
-# R² CHART
-with chart_col2:
-
-    fig_r2, ax_r2 = plt.subplots(figsize=(7, 5))
-
-    ax_r2.bar(
-        model_labels,
-        regression_metrics["test_r2"],
-    )
-
-    ax_r2.set_title("Test R² Comparison")
-    ax_r2.set_ylabel("R²")
-    ax_r2.set_xlabel("Model")
-
-    ax_r2.tick_params(axis="x", rotation=20)
-
-    for index, value in enumerate(
-        regression_metrics["test_r2"]
-    ):
-        ax_r2.text(
-            index,
-            value,
-            f"{value:.3f}",
-            ha="center",
-            va="bottom" if value >= 0 else "top",
-        )
-
-    ax_r2.axhline(
-        y=0,
-        linewidth=1,
-    )
-
-    fig_r2.tight_layout()
-
-    st.pyplot(
-        fig_r2,
-        use_container_width=True,
-    )
-
-    plt.close(fig_r2)
-
-
-# SINGLE EARTHQUAKE INPUT
-st.subheader("Single-earthquake prediction")
 
 st.write(
-    "Enter the characteristics of an earthquake and the "
-    "earthquake counts from the previous 1, 7, and 30 days."
+    "Enter the earthquake activity observed during a day "
+    "and the historical features available up to that day."
 )
 
 
-# INPUT FEATURES
+# DAILY EARTHQUAKE ACTIVITY
 c1, c2, c3 = st.columns(3)
 
-latitude = c1.number_input(
-    "Latitude",
-    value=19.35,
-    min_value=-90.0,
-    max_value=90.0,
-    format="%.5f",
+daily_eq_count = c1.number_input(
+    "Earthquakes during the day",
+    min_value=0,
+    value=5,
+    step=1,
 )
 
-longitude = c2.number_input(
-    "Longitude",
-    value=-155.18,
-    min_value=-180.0,
-    max_value=180.0,
-    format="%.5f",
+prev_1d_eq_count = c2.number_input(
+    "Earthquakes in previous 1 day",
+    min_value=0,
+    value=5,
+    step=1,
 )
 
-depth = c3.number_input(
-    "Depth (km)",
-    value=5.0,
-    min_value=0.0,
-    format="%.2f",
+prev_7d_eq_count = c3.number_input(
+    "Earthquakes in previous 7 days",
+    min_value=0,
+    value=35,
+    step=1,
 )
 
 
 c4, c5, c6 = st.columns(3)
 
-magnitude = c4.number_input(
-    "Magnitude",
-    value=2.0,
-    min_value=0.0,
-    format="%.2f",
-)
-
-rate_1d = c5.number_input(
-    "Earthquakes in previous 1 day",
-    value=10,
-    min_value=0,
-)
-
-rate_7d = c6.number_input(
-    "Earthquakes in previous 7 days",
-    value=40,
-    min_value=0,
-)
-
-rate_30d = st.number_input(
+prev_30d_eq_count = c4.number_input(
     "Earthquakes in previous 30 days",
-    value=120,
     min_value=0,
+    value=120,
+    step=1,
+)
+
+mean_magnitude = c5.number_input(
+    "Mean magnitude",
+    min_value=0.0,
+    value=2.0,
+    step=0.01,
+)
+
+seismic_energy = c6.number_input(
+    "Total relative seismic energy",
+    min_value=0.0,
+    value=10000.0,
+    step=1000.0,
 )
 
 
-# CREATE FEATURE DATAFRAME
-features = pd.DataFrame([
-    {
-        "latitude": latitude,
-        "longitude": longitude,
-        "depth": depth,
-        "magnitude": magnitude,
-        "eq_rate_1d": rate_1d,
-        "eq_rate_7d": rate_7d,
-        "eq_rate_30d": rate_30d,
-    }
-])
+# LOCATION AND DEPTH FEATURES
+c7, c8, c9 = st.columns(3)
 
-# CLASSIFICATION PREDICTION
-st.markdown("### Eruption-state classification")
+mean_latitude = c7.number_input(
+    "Mean latitude",
+    min_value=-90.0,
+    max_value=90.0,
+    value=19.35,
+    format="%.5f",
+)
 
-classification_models = [
-    "random_forest",
+mean_longitude = c8.number_input(
+    "Mean longitude",
+    min_value=-180.0,
+    max_value=180.0,
+    value=-155.18,
+    format="%.5f",
+)
+
+mean_depth = c9.number_input(
+    "Mean depth (km)",
+    min_value=0.0,
+    value=7.5,
+    step=0.1,
+)
+
+
+c10, c11, c12 = st.columns(3)
+
+std_depth = c10.number_input(
+    "Depth standard deviation",
+    min_value=0.0,
+    value=2.0,
+    step=0.1,
+)
+
+days_since_last_eruption = c11.number_input(
+    "Days since last eruption",
+    min_value=-1.0,
+    value=25.0,
+    step=1.0,
+)
+
+last_repose_days = c12.number_input(
+    "Last recorded repose length (days)",
+    min_value=-1.0,
+    value=24.0,
+    step=0.1,
+)
+
+
+# DERIVED FEATURE
+eq_count_ratio_1d_30d = (
+    prev_1d_eq_count
+    / (
+        prev_30d_eq_count
+        + 1.0
+    )
+)
+
+st.caption(
+    f"Derived 1-day/30-day earthquake-count ratio: "
+    f"{eq_count_ratio_1d_30d:.4f}"
+)
+
+
+# CREATE INPUT DATAFRAME
+features = pd.DataFrame(
+    [
+        {
+            "daily_eq_count": daily_eq_count,
+            "mean_latitude": mean_latitude,
+            "mean_longitude": mean_longitude,
+            "mean_depth": mean_depth,
+            "std_depth": std_depth,
+            "mean_magnitude": mean_magnitude,
+            "seismic_energy": seismic_energy,
+            "prev_1d_eq_count": prev_1d_eq_count,
+            "prev_7d_eq_count": prev_7d_eq_count,
+            "prev_30d_eq_count": prev_30d_eq_count,
+            "eq_count_ratio_1d_30d": (
+                eq_count_ratio_1d_30d
+            ),
+            "days_since_last_eruption": (
+                days_since_last_eruption
+            ),
+            "last_repose_days": (
+                last_repose_days
+            ),
+        }
+    ]
+)
+
+features = features[
+    FEATURE_COLUMNS
+]
+
+
+# MODEL SELECTION
+st.markdown(
+    "### Forecast model"
+)
+
+model_names = [
     "logistic_regression",
+    "random_forest",
     "kmeans",
     "neural_network",
 ]
 
-classification_model_name = st.selectbox(
+model_name = st.selectbox(
     "Classification model",
-    classification_models,
-    key="classification_model",
+    model_names,
 )
 
 
+# PREDICTION
 if st.button(
-    "Predict eruption state",
+    "Forecast eruption in next 7 days",
     type="primary",
 ):
 
-    classifier_path = (
+    model_path = (
         MODELS
-        / f"{classification_model_name}_classifier.joblib"
+        / f"{model_name}_classifier.joblib"
     )
 
-    if not classifier_path.exists():
+    if not model_path.exists():
 
         st.error(
-            f"Model file not found: {classifier_path.name}"
+            f"Model file not found: "
+            f"{model_path.name}"
         )
 
     else:
 
-        classifier = joblib.load(
-            classifier_path
+        model = joblib.load(
+            model_path
         )
 
         probability = float(
-            classifier.predict_proba(
+            model.predict_proba(
                 features
             )[0, 1]
         )
 
         prediction = int(
-            probability >= 0.5
+            model.predict(
+                features
+            )[0]
         )
 
-        st.markdown("#### Classification result")
+        st.markdown(
+            "#### Forecast result"
+        )
 
-        result_col1, result_col2 = st.columns(2)
+        result_col1, result_col2 = (
+            st.columns(2)
+        )
 
         if prediction == 1:
 
             result_col1.error(
-                "Predicted state: ERUPTING"
+                f"Predicted: eruption starts "
+                f"within the next "
+                f"{FORECAST_HORIZON_DAYS} days"
             )
 
         else:
 
             result_col1.success(
-                "Predicted state: REPOSE"
+                f"Predicted: no eruption start "
+                f"within the next "
+                f"{FORECAST_HORIZON_DAYS} days"
             )
 
         result_col2.metric(
-            "Estimated eruption probability",
+            "Estimated probability",
             f"{probability:.3f}",
         )
 
+        st.info(
+            "This is an academic model prediction based on "
+            "the supplied historical earthquake and eruption "
+            "catalogues. It is not an operational volcanic "
+            "warning."
+        )
 
-# TIME-TO-ERUPTION REGRESSION
-st.markdown("### Time-to-eruption regression")
 
-regression_models = [
-    "random_forest",
-    "kmeans",
-    "neural_network",
-]
-
-regression_model_name = st.selectbox(
-    "Regression model",
-    regression_models,
-    key="regression_model",
+# GENERATED FIGURES
+st.subheader(
+    "Generated project figures"
 )
-
-
-if st.button(
-    "Predict time to eruption",
-):
-
-    regressor_path = (
-        MODELS
-        / f"{regression_model_name}_regressor.joblib"
-    )
-
-    if not regressor_path.exists():
-
-        st.error(
-            f"Model file not found: {regressor_path.name}"
-        )
-
-    else:
-
-        regressor = joblib.load(
-            regressor_path
-        )
-
-        predicted_hours = float(
-            regressor.predict(
-                features
-            )[0]
-        )
-
-        # Prevent a tiny negative floating-point
-        # prediction from being displayed.
-        predicted_hours = max(
-            0.0,
-            predicted_hours,
-        )
-
-        predicted_days = (
-            predicted_hours / 24.0
-        )
-
-        st.markdown("#### Regression result")
-
-        result_col1, result_col2 = st.columns(2)
-
-        result_col1.metric(
-            "Predicted time to eruption",
-            f"{predicted_hours:.2f} hours",
-        )
-
-        result_col2.metric(
-            "Predicted time to eruption",
-            f"{predicted_days:.2f} days",
-        )
-
-        if predicted_hours == 0:
-
-            st.warning(
-                "The model predicts approximately 0 hours "
-                "to eruption, corresponding to an erupting state."
-            )
-
-        else:
-
-            st.info(
-                "This is a model prediction based only on the "
-                "seven earthquake features entered above. "
-                "It is not a real-time volcanic warning."
-            )
-
-
-# GENERATED PROJECT FIGURES
-st.subheader("Generated project figures")
 
 
 figure_files = [
     (
         "classification_comparison.png",
-        "Classification Model Comparison",
+        "Daily 7-Day Forecast Model Comparison",
     ),
     (
         "feature_importance.png",
         "Random Forest Feature Importance",
     ),
     (
-        "observed_vs_predicted.png",
-        "Observed vs Predicted Time to Eruption",
+        "test_forecast_timeline.png",
+        "Time-Based Test Forecast",
     ),
 ]
 
 
 for filename, caption in figure_files:
 
-    path = FIGURES / filename
+    path = (
+        FIGURES
+        / filename
+    )
 
     if path.exists():
 
@@ -447,3 +467,54 @@ for filename, caption in figure_files:
             caption=caption,
             use_container_width=True,
         )
+
+
+# CONFUSION MATRICES
+st.subheader(
+    "Test-set confusion matrices"
+)
+
+confusion_files = [
+    (
+        "logistic_regression_confusion_matrix.png",
+        "Logistic Regression",
+    ),
+    (
+        "kmeans_confusion_matrix.png",
+        "K-Means",
+    ),
+    (
+        "random_forest_confusion_matrix.png",
+        "Random Forest",
+    ),
+    (
+        "neural_network_confusion_matrix.png",
+        "Neural Network",
+    ),
+]
+
+confusion_columns = st.columns(2)
+
+for index, (
+    filename,
+    caption,
+) in enumerate(
+    confusion_files
+):
+
+    path = (
+        FIGURES
+        / filename
+    )
+
+    if path.exists():
+
+        with confusion_columns[
+            index % 2
+        ]:
+
+            st.image(
+                str(path),
+                caption=caption,
+                use_container_width=True,
+            )

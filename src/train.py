@@ -15,7 +15,6 @@ import seaborn as sns
 
 from sklearn.ensemble import (
     RandomForestClassifier,
-    RandomForestRegressor,
 )
 
 from sklearn.linear_model import (
@@ -27,18 +26,14 @@ from sklearn.metrics import (
     classification_report,
     cohen_kappa_score,
     confusion_matrix,
-    mean_squared_error,
-    r2_score,
+    precision_score,
+    recall_score,
+    f1_score,
     roc_auc_score,
-)
-
-from sklearn.model_selection import (
-    train_test_split,
 )
 
 from sklearn.neural_network import (
     MLPClassifier,
-    MLPRegressor,
 )
 
 from sklearn.pipeline import (
@@ -49,14 +44,19 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
+from sklearn.impute import (
+    SimpleImputer,
+)
+
 from .models import (
     KMeansPrototypeClassifier,
-    KMeansTimeRegressor,
 )
 
 from .prepare_data import (
     FEATURE_COLUMNS,
+    FORECAST_HORIZON_DAYS,
     ROOT,
+    TARGET_COLUMN,
     build_dataset,
 )
 
@@ -85,44 +85,109 @@ METRICS = (
 
 
 # ============================================================
-# DATA SPLITTING
+# TIME-BASED SPLIT
 # ============================================================
 
-def split_classification_data(df):
+def split_time_series_data(df):
+    """
+    Split the daily observations chronologically.
 
-    X = df[
+    No random shuffling is used.
+
+    70% -> training
+    15% -> development
+    15% -> testing
+    """
+
+    data = (
+        df.sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    n = len(data)
+
+    train_end = int(
+        n * 0.70
+    )
+
+    dev_end = int(
+        n * 0.85
+    )
+
+    train = data.iloc[
+        :train_end
+    ]
+
+    dev = data.iloc[
+        train_end:dev_end
+    ]
+
+    test = data.iloc[
+        dev_end:
+    ]
+
+    X_train = train[
         FEATURE_COLUMNS
     ]
 
-    y = (
-        df["erupting"]
-        .astype(int)
-    )
+    y_train = train[
+        TARGET_COLUMN
+    ].astype(int)
 
-    # 70% training
-    # 30% temporary
-    X_train, X_temp, y_train, y_temp = (
-        train_test_split(
-            X,
-            y,
-            test_size=0.30,
-            stratify=y,
-            random_state=42,
-        )
-    )
+    X_dev = dev[
+        FEATURE_COLUMNS
+    ]
 
-    # Of the remaining 30%:
-    # 20% total -> development
-    # 10% total -> test
-    X_dev, X_test, y_dev, y_test = (
-        train_test_split(
-            X_temp,
-            y_temp,
-            test_size=1 / 3,
-            stratify=y_temp,
-            random_state=42,
-        )
-    )
+    y_dev = dev[
+        TARGET_COLUMN
+    ].astype(int)
+
+    X_test = test[
+        FEATURE_COLUMNS
+    ]
+
+    y_test = test[
+        TARGET_COLUMN
+    ].astype(int)
+
+    split_info = {
+        "train_start": str(
+            train["date"].min().date()
+        ),
+        "train_end": str(
+            train["date"].max().date()
+        ),
+        "dev_start": str(
+            dev["date"].min().date()
+        ),
+        "dev_end": str(
+            dev["date"].max().date()
+        ),
+        "test_start": str(
+            test["date"].min().date()
+        ),
+        "test_end": str(
+            test["date"].max().date()
+        ),
+        "train_rows": int(
+            len(train)
+        ),
+        "dev_rows": int(
+            len(dev)
+        ),
+        "test_rows": int(
+            len(test)
+        ),
+        "train_positive": int(
+            y_train.sum()
+        ),
+        "dev_positive": int(
+            y_dev.sum()
+        ),
+        "test_positive": int(
+            y_test.sum()
+        ),
+    }
 
     return (
         X_train,
@@ -131,54 +196,10 @@ def split_classification_data(df):
         y_train,
         y_dev,
         y_test,
-    )
-
-
-def split_regression_data(df):
-
-    df = df.dropna(
-        subset=[
-            "time_to_eruption_hours"
-        ]
-    ).copy()
-
-    X = df[
-        FEATURE_COLUMNS
-    ]
-
-    y = df[
-        "time_to_eruption_hours"
-    ]
-
-    # 70% training
-    # 30% temporary
-    X_train, X_temp, y_train, y_temp = (
-        train_test_split(
-            X,
-            y,
-            test_size=0.30,
-            random_state=42,
-        )
-    )
-
-    # 20% development
-    # 10% test
-    X_dev, X_test, y_dev, y_test = (
-        train_test_split(
-            X_temp,
-            y_temp,
-            test_size=1 / 3,
-            random_state=42,
-        )
-    )
-
-    return (
-        X_train,
-        X_dev,
-        X_test,
-        y_train,
-        y_dev,
-        y_test,
+        split_info,
+        train,
+        dev,
+        test,
     )
 
 
@@ -192,6 +213,12 @@ def get_classification_models():
 
         "logistic_regression": Pipeline(
             [
+                (
+                    "imputer",
+                    SimpleImputer(
+                        strategy="median"
+                    ),
+                ),
                 (
                     "scaler",
                     StandardScaler(),
@@ -209,6 +236,12 @@ def get_classification_models():
         "kmeans": Pipeline(
             [
                 (
+                    "imputer",
+                    SimpleImputer(
+                        strategy="median"
+                    ),
+                ),
+                (
                     "scaler",
                     StandardScaler(),
                 ),
@@ -223,19 +256,36 @@ def get_classification_models():
             ]
         ),
 
-        "random_forest": (
-            RandomForestClassifier(
-                n_estimators=400,
-                max_depth=15,
-                max_features="sqrt",
-                class_weight="balanced",
-                random_state=42,
-                n_jobs=-1,
-            )
+        "random_forest": Pipeline(
+            [
+                (
+                    "imputer",
+                    SimpleImputer(
+                        strategy="median"
+                    ),
+                ),
+                (
+                    "model",
+                    RandomForestClassifier(
+                        n_estimators=400,
+                        max_depth=15,
+                        max_features="sqrt",
+                        class_weight="balanced",
+                        random_state=42,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
         ),
 
         "neural_network": Pipeline(
             [
+                (
+                    "imputer",
+                    SimpleImputer(
+                        strategy="median"
+                    ),
+                ),
                 (
                     "scaler",
                     StandardScaler(),
@@ -265,76 +315,10 @@ def get_classification_models():
 
 
 # ============================================================
-# REGRESSION MODELS
-# ============================================================
-
-def get_regression_models():
-
-    return {
-
-        "kmeans": Pipeline(
-            [
-                (
-                    "scaler",
-                    StandardScaler(),
-                ),
-                (
-                    "model",
-                    KMeansTimeRegressor(
-                        n_clusters=10,
-                        random_state=42,
-                        n_init=20,
-                    ),
-                ),
-            ]
-        ),
-
-        "random_forest": (
-            RandomForestRegressor(
-                n_estimators=400,
-                max_depth=15,
-                max_features="sqrt",
-                random_state=42,
-                n_jobs=-1,
-            )
-        ),
-
-        "neural_network": Pipeline(
-            [
-                (
-                    "scaler",
-                    StandardScaler(),
-                ),
-                (
-                    "model",
-                    MLPRegressor(
-                        hidden_layer_sizes=(
-                            128,
-                            128,
-                            128,
-                            128,
-                        ),
-                        activation="relu",
-                        alpha=1e-4,
-                        batch_size=50,
-                        learning_rate_init=1e-3,
-                        max_iter=500,
-                        early_stopping=True,
-                        validation_fraction=0.15,
-                        random_state=42,
-                    ),
-                ),
-            ]
-        ),
-    }
-
-
-# ============================================================
 # CLASSIFICATION EVALUATION
 # ============================================================
 
 def evaluate_classification(
-    name,
     model,
     X,
     y,
@@ -349,8 +333,6 @@ def evaluate_classification(
     )
 
     return {
-
-        "model": name,
 
         "accuracy": float(
             accuracy_score(
@@ -373,6 +355,30 @@ def evaluate_classification(
             )
         ),
 
+        "precision": float(
+            precision_score(
+                y,
+                predictions,
+                zero_division=0,
+            )
+        ),
+
+        "recall": float(
+            recall_score(
+                y,
+                predictions,
+                zero_division=0,
+            )
+        ),
+
+        "f1": float(
+            f1_score(
+                y,
+                predictions,
+                zero_division=0,
+            )
+        ),
+
         "confusion_matrix": (
             confusion_matrix(
                 y,
@@ -385,51 +391,53 @@ def evaluate_classification(
                 y,
                 predictions,
                 output_dict=True,
+                zero_division=0,
             )
         ),
     }
 
 
 # ============================================================
-# REGRESSION EVALUATION
+# CLEAN OLD GENERATED OUTPUTS
 # ============================================================
 
-def evaluate_regression(
-    name,
-    model,
-    X,
-    y,
-):
+def clean_old_outputs():
 
-    predictions = (
-        model.predict(X)
+    MODELS.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    rmse = (
-        mean_squared_error(
-            y,
-            predictions,
-        )
-        ** 0.5
+    FIGURES.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    r2 = r2_score(
-        y,
-        predictions,
+    METRICS.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    return {
+    # Remove old classification and regression models.
+    # The new run will recreate only the four classifiers.
+    for path in MODELS.glob(
+        "*.joblib"
+    ):
+        path.unlink()
 
-        "model": name,
+    # Remove old generated figures, including
+    # the previous regression figures.
+    for path in FIGURES.glob(
+        "*.png"
+    ):
+        path.unlink()
 
-        "rmse": float(
-            rmse
-        ),
-
-        "r2": float(
-            r2
-        ),
-    }
+    # Remove old metric files, including
+    # regression_metrics.json.
+    for path in METRICS.glob(
+        "*.json"
+    ):
+        path.unlink()
 
 
 # ============================================================
@@ -537,7 +545,7 @@ def plot_classification_comparison(
     )
 
     ax.set_title(
-        "Classification Model Comparison"
+        "Daily 7-Day Eruption Forecast: Model Comparison"
     )
 
     ax.legend()
@@ -554,75 +562,6 @@ def plot_classification_comparison(
 
 
 # ============================================================
-# REGRESSION COMPARISON
-# ============================================================
-
-def plot_regression_comparison(
-    results,
-):
-
-    df = pd.DataFrame(
-        results
-    )
-
-    x = np.arange(
-        len(df)
-    )
-
-    fig, ax = plt.subplots(
-        figsize=(10, 5)
-    )
-
-    ax.bar(
-        x - 0.18,
-        df["rmse"],
-        width=0.36,
-        label="RMSE",
-    )
-
-    ax.bar(
-        x + 0.18,
-        df["r2"],
-        width=0.36,
-        label="R²",
-    )
-
-    ax.set_xticks(
-        x
-    )
-
-    ax.set_xticklabels(
-        [
-            name.replace(
-                "_",
-                " ",
-            ).title()
-            for name in df["model"]
-        ]
-    )
-
-    ax.set_ylabel(
-        "Metric Value"
-    )
-
-    ax.set_title(
-        "Regression Model Comparison"
-    )
-
-    ax.legend()
-
-    plt.tight_layout()
-
-    plt.savefig(
-        FIGURES
-        / "regression_comparison.png",
-        dpi=180,
-    )
-
-    plt.close()
-
-
-# ============================================================
 # RANDOM FOREST FEATURE IMPORTANCE
 # ============================================================
 
@@ -630,9 +569,13 @@ def plot_feature_importance(
     random_forest,
 ):
 
-    importances = (
+    model = (
         random_forest
-        .feature_importances_
+        .named_steps["model"]
+    )
+
+    importances = (
+        model.feature_importances_
     )
 
     data = pd.DataFrame(
@@ -648,7 +591,7 @@ def plot_feature_importance(
     )
 
     plt.figure(
-        figsize=(8, 5)
+        figsize=(9, 6)
     )
 
     plt.barh(
@@ -676,64 +619,73 @@ def plot_feature_importance(
 
 
 # ============================================================
-# OBSERVED VS PREDICTED
+# TEST-SET FORECAST TIMELINE
 # ============================================================
 
-def plot_observed_vs_predicted(
+def plot_test_forecast_timeline(
     model,
     X_test,
+    test_dates,
     y_test,
 ):
 
-    predictions = (
-        model.predict(
+    probabilities = (
+        model.predict_proba(
             X_test
-        )
+        )[:, 1]
     )
 
-    plt.figure(
-        figsize=(6, 6)
+    fig, ax = plt.subplots(
+        figsize=(11, 5)
     )
 
-    plt.scatter(
-        y_test,
-        predictions,
-        alpha=0.45,
+    ax.plot(
+        test_dates,
+        probabilities,
+        label="Predicted eruption probability",
     )
 
-    minimum = min(
-        float(y_test.min()),
-        float(predictions.min()),
+    ax.scatter(
+        test_dates[
+            y_test.to_numpy() == 1
+        ],
+        np.ones(
+            int(
+                (
+                    y_test == 1
+                ).sum()
+            )
+        ),
+        label="Actual eruption within next 7 days",
+        marker="x",
     )
 
-    maximum = max(
-        float(y_test.max()),
-        float(predictions.max()),
+    ax.set_ylim(
+        0,
+        1.05,
     )
 
-    plt.plot(
-        [minimum, maximum],
-        [minimum, maximum],
-        linestyle="--",
+    ax.set_ylabel(
+        "Predicted probability"
     )
 
-    plt.xlabel(
-        "Observed Time to Eruption (hours)"
+    ax.set_xlabel(
+        "Date"
     )
 
-    plt.ylabel(
-        "Predicted Time to Eruption (hours)"
+    ax.set_title(
+        "Time-Based Test Forecast"
     )
 
-    plt.title(
-        "Observed vs Predicted Time to Eruption"
-    )
+    ax.legend()
+
+    fig.autofmt_xdate()
 
     plt.tight_layout()
 
     plt.savefig(
         FIGURES
-        / "observed_vs_predicted.png",
+        / "test_forecast_timeline.png",
         dpi=180,
     )
 
@@ -741,40 +693,23 @@ def plot_observed_vs_predicted(
 
 
 # ============================================================
-# MAIN TRAINING PIPELINE
+# MAIN
 # ============================================================
 
 def main():
 
-    MODELS.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    FIGURES.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    METRICS.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    clean_old_outputs()
 
     print()
     print("=" * 60)
-    print("BUILDING DATASET")
+    print("BUILDING DAILY FORECAST DATASET")
     print("=" * 60)
 
     df = build_dataset()
 
-    # ========================================================
-    # CLASSIFICATION
-    # ========================================================
-
     print()
     print("=" * 60)
-    print("CLASSIFICATION")
+    print("TIME-BASED CLASSIFICATION")
     print("=" * 60)
 
     (
@@ -784,8 +719,53 @@ def main():
         y_train,
         y_dev,
         y_test,
-    ) = split_classification_data(
+        split_info,
+        train_df,
+        dev_df,
+        test_df,
+    ) = split_time_series_data(
         df
+    )
+
+    print()
+    print("Chronological split:")
+    print(
+        f"Training:    "
+        f"{split_info['train_start']} "
+        f"to "
+        f"{split_info['train_end']} "
+        f"({split_info['train_rows']:,} rows)"
+    )
+    print(
+        f"Development: "
+        f"{split_info['dev_start']} "
+        f"to "
+        f"{split_info['dev_end']} "
+        f"({split_info['dev_rows']:,} rows)"
+    )
+    print(
+        f"Testing:     "
+        f"{split_info['test_start']} "
+        f"to "
+        f"{split_info['test_end']} "
+        f"({split_info['test_rows']:,} rows)"
+    )
+
+    print()
+    print(
+        "Positive forecast windows:"
+    )
+    print(
+        f"  Training:    "
+        f"{split_info['train_positive']:,}"
+    )
+    print(
+        f"  Development: "
+        f"{split_info['dev_positive']:,}"
+    )
+    print(
+        f"  Testing:     "
+        f"{split_info['test_positive']:,}"
     )
 
     classification_results = []
@@ -811,7 +791,6 @@ def main():
 
         development_results = (
             evaluate_classification(
-                name,
                 model,
                 X_dev,
                 y_dev,
@@ -820,7 +799,6 @@ def main():
 
         test_results = (
             evaluate_classification(
-                name,
                 model,
                 X_test,
                 y_test,
@@ -858,6 +836,24 @@ def main():
                 "test_accuracy": (
                     test_results[
                         "accuracy"
+                    ]
+                ),
+
+                "test_precision": (
+                    test_results[
+                        "precision"
+                    ]
+                ),
+
+                "test_recall": (
+                    test_results[
+                        "recall"
+                    ]
+                ),
+
+                "test_f1": (
+                    test_results[
+                        "f1"
                     ]
                 ),
             }
@@ -918,172 +914,54 @@ def main():
         random_forest_classifier
     )
 
-    # REGRESSION
-    print()
-    print("=" * 60)
-    print("REGRESSION")
-    print("=" * 60)
-
-    (
-        X_train,
-        X_dev,
+    plot_test_forecast_timeline(
+        random_forest_classifier,
         X_test,
-        y_train,
-        y_dev,
-        y_test,
-    ) = split_regression_data(
-        df
-    )
-
-    regression_results = []
-
-    regression_models = (
-        get_regression_models()
-    )
-
-    for name, model in (
-        regression_models.items()
-    ):
-
-        print()
-        print(
-            f"Training regressor: "
-            f"{name}"
-        )
-
-        model.fit(
-            X_train,
-            y_train,
-        )
-
-        development_results = (
-            evaluate_regression(
-                name,
-                model,
-                X_dev,
-                y_dev,
-            )
-        )
-
-        test_results = (
-            evaluate_regression(
-                name,
-                model,
-                X_test,
-                y_test,
-            )
-        )
-
-        regression_results.append(
-            {
-                "model": name,
-
-                "dev_rmse": (
-                    development_results[
-                        "rmse"
-                    ]
-                ),
-
-                "dev_r2": (
-                    development_results[
-                        "r2"
-                    ]
-                ),
-
-                "test_rmse": (
-                    test_results[
-                        "rmse"
-                    ]
-                ),
-
-                "test_r2": (
-                    test_results[
-                        "r2"
-                    ]
-                ),
-            }
-        )
-
-        joblib.dump(
-            model,
-            MODELS
-            / f"{name}_regressor.joblib",
-        )
-
-    with open(
-        METRICS
-        / "regression_metrics.json",
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
-            regression_results,
-            file,
-            indent=2,
-        )
-
-    plot_regression_comparison(
-        [
-            {
-                "model": result["model"],
-                "rmse": result[
-                    "test_rmse"
-                ],
-                "r2": result[
-                    "test_r2"
-                ],
-            }
-            for result
-            in regression_results
-        ]
-    )
-
-    random_forest_regressor = (
-        joblib.load(
-            MODELS
-            / "random_forest_regressor.joblib"
-        )
-    )
-
-    plot_observed_vs_predicted(
-        random_forest_regressor,
-        X_test,
+        test_df["date"],
         y_test,
     )
 
-    # FINAL SUMMARY
     summary = {
+
+        "task": (
+            "Daily-window classification: "
+            "predict whether an eruption starts "
+            f"within the next "
+            f"{FORECAST_HORIZON_DAYS} days"
+        ),
+
+        "forecast_horizon_days": (
+            FORECAST_HORIZON_DAYS
+        ),
 
         "rows": int(
             len(df)
         ),
 
         "positive_labels": int(
-            df["erupting"].sum()
+            df[TARGET_COLUMN].sum()
         ),
 
         "negative_labels": int(
             (
-                df["erupting"]
-                == 0
+                df[TARGET_COLUMN] == 0
             ).sum()
         ),
 
-        "regression_rows": int(
-            df[
-                "time_to_eruption_hours"
-            ]
-            .notna()
-            .sum()
+        "date_start": str(
+            df["date"].min().date()
         ),
+
+        "date_end": str(
+            df["date"].max().date()
+        ),
+
+        "features": FEATURE_COLUMNS,
+
+        "split": split_info,
 
         "classification_models": (
             classification_results
-        ),
-
-        "regression_models": (
-            regression_results
         ),
     }
 
@@ -1117,17 +995,6 @@ def main():
     )
 
     print()
-    print("Regression results:")
-
-    print(
-        pd.DataFrame(
-            regression_results
-        ).to_string(
-            index=False
-        )
-    )
-
-    print()
     print(
         f"Models saved to:\n"
         f"{MODELS}"
@@ -1147,4 +1014,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  

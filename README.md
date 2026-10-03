@@ -14,8 +14,6 @@ The target is:
 
 > **Will an eruption start within the next 7 days?**
 
-The target is:
-
 - `1` = an eruption starts during the following 7 calendar days
 - `0` = no eruption starts during the following 7 calendar days
 
@@ -102,6 +100,53 @@ The resulting dataset is saved as:
 data/processed/model_dataset.csv
 ```
 
+### Days with no recorded earthquakes
+
+The daily dataset also contains calendar days with no earthquake records.
+
+For the 82 days with no recorded earthquakes, location and magnitude-related daily features are median-imputed using the available earthquake observations.
+
+This allows those calendar days to remain part of the chronological forecasting timeline rather than being removed.
+
+## Model evaluation
+
+Classification performance is evaluated on the development and unseen test sets.
+
+The classification metrics include:
+
+- Cohen's Kappa
+- AUROC
+- Accuracy
+- Precision
+- Recall
+- F1-score
+
+The classification decision threshold is **not fixed at 0.5**. For each model, the threshold is selected using only the development set by choosing the threshold that gives the highest Cohen's Kappa. That selected threshold is then kept fixed when evaluating the unseen test set.
+
+The test set is never used to choose the threshold.
+
+This is important because the eruption class is relatively less frequent than the non-eruption class.
+
+The project also generates:
+
+- confusion matrices
+- classification model comparison
+- Random Forest feature importance
+- time-based test forecast plot
+
+## Results
+
+The exact numerical results are generated when the training pipeline is run and are stored in:
+
+```text
+results/metrics/classification_metrics.json
+results/metrics/summary.json
+```
+
+Because the project uses a chronological split and a development-selected decision threshold, results should be reported from the current run rather than copied from the supplied paper.
+
+The test set is relatively small, so performance can vary substantially between different historical periods. The test results should therefore be interpreted together with the split dates and number of positive forecast windows.
+
 ## Project structure
 
 ```text
@@ -110,7 +155,6 @@ volcano-eruption-ml/
 ├── download_data.py
 ├── requirements.txt
 ├── README.md
-├── PROJECT_PLAN.md
 ├── .gitignore
 ├── data/
 │   ├── raw/
@@ -129,6 +173,8 @@ volcano-eruption-ml/
 ```
 
 ## Setup
+
+Python 3.10 or newer is recommended.
 
 Create the virtual environment:
 
@@ -154,18 +200,30 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+The project should be run with the pinned package versions in `requirements.txt` so that the saved models and reported results are reproducible.
+
 ## Run the project
 
-### 1. Download the supplied data
+### 1. Obtain the supplied data
 
-```bash
-python download_data.py
+The supplied earthquake and eruption datasets are already included in the repository under:
+
+```text
+data/raw/
 ```
+
+Therefore, `download_data.py` is optional when using the repository as submitted. It can be used if the raw datasets need to be obtained again.
 
 ### 2. Build the daily forecasting dataset
 
 ```bash
 python -m src.prepare_data
+```
+
+This creates:
+
+```text
+data/processed/model_dataset.csv
 ```
 
 ### 3. Train all models
@@ -174,11 +232,23 @@ python -m src.prepare_data
 python -m src.train
 ```
 
+The training script:
+
+- creates the chronological 70/15/15 split
+- trains all four classification models
+- selects each model's classification threshold using the development set
+- evaluates the fixed threshold on the unseen test set
+- saves trained models
+- saves evaluation metrics
+- generates the project figures
+
 ### 4. Run the Streamlit application
 
 ```bash
 streamlit run app.py
 ```
+
+The Streamlit application displays the project results and provides an interactive forecasting demonstration using the trained models.
 
 ## Expected pipeline
 
@@ -202,6 +272,8 @@ K-Means
 Random Forest
 Neural Network
         ↓
+Development-based threshold selection
+        ↓
 Kappa / AUROC / Accuracy / Precision / Recall / F1
         ↓
 Confusion matrices
@@ -209,11 +281,48 @@ Feature importance
 Time-based forecast plot
 ```
 
+## Generated outputs
+
+After running the training pipeline, the main generated outputs are:
+
+### Trained models
+
+```text
+models/
+├── logistic_regression_classifier.joblib
+├── kmeans_classifier.joblib
+├── random_forest_classifier.joblib
+└── neural_network_classifier.joblib
+```
+
+### Figures
+
+```text
+results/figures/
+├── classification_comparison.png
+├── feature_importance.png
+├── kmeans_confusion_matrix.png
+├── logistic_regression_confusion_matrix.png
+├── neural_network_confusion_matrix.png
+├── random_forest_confusion_matrix.png
+└── test_forecast_timeline.png
+```
+
+### Metrics
+
+```text
+results/metrics/
+├── classification_metrics.json
+└── summary.json
+```
+
 ## Interpretation
 
 This is an academic machine-learning forecasting exercise, not an operational volcano-warning system.
 
 The supplied dataset covers a limited historical period and contains a relatively small number of eruption events. A time-based evaluation is therefore expected to produce different results from a randomly shuffled evaluation.
+
+The test period contains a limited number of positive eruption-forecast windows, so metrics such as Cohen's Kappa, precision, recall and F1 can change noticeably depending on the historical period used for testing.
 
 The model results should be interpreted as experiments on the supplied historical data rather than as evidence of real-time eruption prediction capability.
 
@@ -225,4 +334,4 @@ The project is inspired by the supplied paper:
 
 The dataset and original problem formulation are based on the supplied paper and its associated PEEVED project.
 
-The implementation in this repository changes the forecasting unit, target horizon, data splitting strategy and feature set.
+The implementation in this repository changes the forecasting unit, target horizon, data splitting strategy, feature set and classification threshold-selection procedure.

@@ -1,0 +1,34 @@
+[
+  {
+    "model": "logistic_regression",
+    "dev_kappa": 0.40694837601489664,
+    "dev_auroc": 0.8401272411798728,
+    "test_kappa": 0.40475432849789417,
+    "test_auroc": 0.794900153609831,
+    "test_accuracy": 0.773497688751926
+  },
+  {
+    "model": "kmeans",
+    "dev_kappa": 0.32217673841226424,
+    "dev_auroc": 0.8078156930788509,
+    "test_kappa": 0.22680047225501765,
+    "test_auroc": 0.7298310291858678,
+    "test_accuracy": 0.6579352850539292
+  },
+  {
+    "model": "random_forest",
+    "dev_kappa": 0.8611035090015587,
+    "dev_auroc": 0.9761133603238867,
+    "test_kappa": 0.81469395746486,
+    "test_auroc": 0.9639938556067589,
+    "test_accuracy": 0.9460708782742681
+  },
+  {
+    "model": "neural_network",
+    "dev_kappa": 0.647358057824964,
+    "dev_auroc": 0.8652207441681126,
+    "test_kappa": 0.5522106218792555,
+    "test_auroc": 0.831351766513057,
+    "test_accuracy": 0.8828967642526965
+  }
+]

@@ -76,6 +76,13 @@ summary = json.loads(
 )
 
 
+# LOAD MODEL-SPECIFIC DECISION THRESHOLDS
+thresholds = {
+    item["model"]: item["threshold"]
+    for item in summary["classification_models"]
+}
+
+
 # DATASET SUMMARY
 col1, col2, col3 = st.columns(3)
 
@@ -388,10 +395,14 @@ if st.button(
             )[0, 1]
         )
 
+        # Use the model-specific threshold selected
+        # on the development set during training.
+        threshold = float(
+            thresholds[model_name]
+        )
+
         prediction = int(
-            model.predict(
-                features
-            )[0]
+            probability >= threshold
         )
 
         st.markdown(
@@ -423,13 +434,17 @@ if st.button(
             f"{probability:.3f}",
         )
 
+        st.caption(
+            f"Decision threshold used: "
+            f"{threshold:.2f}"
+        )
+
         st.info(
             "This is an academic model prediction based on "
             "the supplied historical earthquake and eruption "
             "catalogues. It is not an operational volcanic "
             "warning."
         )
-
 
 # GENERATED FIGURES
 st.subheader(

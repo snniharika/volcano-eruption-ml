@@ -174,7 +174,7 @@ volcano-eruption-ml/
 
 ## Setup
 
-Python 3.10 or newer is recommended.
+Python 3.12
 
 Create the virtual environment:
 
